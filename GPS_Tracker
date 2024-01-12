@@ -1,0 +1,753 @@
+//#include <GyverPower.h>
+//#include <powerConstants.h>
+#include <EEPROM.h>
+#include <SoftwareSerial.h>
+#include <TinyGPS++.h>
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SPITFT.h>
+#include <gfxfont.h>
+#include <Adafruit_ST7735.h>
+#include <pcf8574.h>
+
+#define BLACK 0x0000
+#define BLUE 0x001F
+#define RED 0xF800
+#define GREEN 0x07E0
+// #define CYAN 0x07FF
+#define MAGENTA 0xF81F
+#define YELLOW 0xFFE0
+// #define WHITE 0xFFFF
+
+int keys[4][3] = {
+  { 1, 2, 3 },
+  { 4, 5, 6 },
+  { 7, 8, 9 },
+  { 10, 0, 11 }
+};
+bool load = 0;
+long t = 0;
+long t1 = -999999;
+bool valdat = 0;
+bool valtime = 0;
+int prevInterfaceLevel = 1;
+int interFaceLevel = 1;
+bool silentmode = 0;
+bool EHC = 0;
+double lat1;
+double lon1;
+double lat2;
+double lon2;
+double lat3;
+double lon3;
+double lat4;
+double lon4;
+int key2 = -1;
+String entr = "";
+double nowlat;
+double nowlon;
+int submean = 0;
+double submeanf = 0.00;
+
+#define TFT_CS 0
+#define TFT_RST -1
+#define TFT_DC 15
+#define KEYBOARD_ADRESS 0x38
+#define GPS_RX 12
+#define GPS_TX 16
+
+int UPDATE_TIME = 5;  //sec
+int deltime = 100;    //ms
+
+PCF8574 keyb(KEYBOARD_ADRESS);
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+SoftwareSerial ss(GPS_RX, GPS_TX);
+TinyGPSPlus gps;
+void setup() {
+  pinMode(2, INPUT_PULLUP);
+  digitalWrite(7, 1);
+  pinMode(7, OUTPUT);
+  Serial.begin(115200);
+  ss.begin(9600);
+  Serial.println("Hi");
+  //power.autoCalibrate();
+  //power.setSleepMode(POWERDOWN_SLEEP);
+  pinMode(keyb, 0, OUTPUT);
+  pinMode(keyb, 1, OUTPUT);
+  pinMode(keyb, 2, OUTPUT);
+  pinMode(keyb, 3, OUTPUT);
+  pinMode(keyb, 4, OUTPUT);
+  pinMode(keyb, 5, INPUT_PULLUP);
+  pinMode(keyb, 6, INPUT_PULLUP);
+  pinMode(keyb, 7, INPUT_PULLUP);
+  tft.initR(INITR_BLACKTAB);
+  tft.setRotation(45);
+  tft.setCursor(0, 0);
+  tft.setTextSize(1);
+  Serial.print("Loading GPS...");
+  while (millis() < 5000) {
+    while (ss.available() > 0) {
+      gps.encode(ss.read());
+    }
+    if (gps.charsProcessed() > 10) {
+      Serial.println("Done!");
+      break;
+    } else {
+      tft.setCursor(0, 0);
+      tft.setTextColor(RED);
+      tft.print("ERROR: GPS NOT RESPONDING!");
+      delay(200);
+    }
+  }
+  if (EEPROM.read(0) != 'w') {
+    Serial.println("No EEPROM data detected, loading deafult settings...");
+    EEPROM.put(0, 'w');  //is there any data
+    //EEPROM.put(1, 0);           //EHC (EEPROM Head Cell)
+    EEPROM.put(3, 0);     //silentmode
+    EEPROM.put(4, -1);    //1st point
+    EEPROM.put(12, -1);   //1st point
+    EEPROM.put(20, -1);   //2nd point
+    EEPROM.put(28, -1);   //2nd point
+    EEPROM.put(36, -1);   //3d point
+    EEPROM.put(44, -1);   //3d point
+    EEPROM.put(52, -1);   //4th point
+    EEPROM.put(60, -1);   //4th point
+    EEPROM.put(68, 100);  //deltime
+    EEPROM.put(70, 5);    //update time
+  }
+  getFromEEPROM();
+  tft.setCursor(0, 0);
+  tft.fillScreen(BLACK);
+  drawInterface(1);
+}
+
+void loop() {
+  if (millis() - t1 >= UPDATE_TIME * 1000) {
+    t1 = millis();
+    tft.fillRect(11, 0, 160, 8, BLACK);
+    drawGPSload();
+    drawConnectLevel();
+    drawDate();
+    drawTime();
+    drawBatLevel();
+    if ((interFaceLevel != prevInterfaceLevel) || interFaceLevel == 1) {
+      drawInterface(interFaceLevel);
+    }
+  }
+  int key = readKey();
+  if (key2 != -1) {
+    key = key2;
+    key2 = -1;
+  }
+  if (key != -1) {
+    Serial.println(key);
+    if (key <= 4) {
+      interFaceLevel = key;
+      drawInterface(interFaceLevel);
+      if (key == 1) {
+        drawCompass();
+      }
+      if (key == 2) {
+        tft.setCursor(34, 15);
+        tft.setTextColor(MAGENTA);
+        tft.print(5);
+        tft.setTextColor(BLUE);
+        tft.print(" - Set target 1");
+        tft.setCursor(34, 30);
+        tft.setTextColor(MAGENTA);
+        tft.print(6);
+        tft.setTextColor(BLUE);
+        tft.print(" - Set target 2");
+        tft.setCursor(34, 45);
+        tft.setTextColor(MAGENTA);
+        tft.print(7);
+        tft.setTextColor(BLUE);
+        tft.print(" - Set target 3");
+        tft.setCursor(34, 60);
+        tft.setTextColor(MAGENTA);
+        tft.print(8);
+        tft.setTextColor(BLUE);
+        tft.print(" - Set target 4");
+      }
+      if (key == 3) {
+        tft.setCursor(34, 15);
+        tft.setTextColor(MAGENTA);
+        tft.print(5);
+        tft.setTextColor(BLUE);
+        tft.print(" - Restart");
+        tft.setCursor(34, 30);
+        tft.setTextColor(MAGENTA);
+        tft.print(6);
+        tft.setTextColor(BLUE);
+        tft.print(" - Fix memory bugs");
+        tft.setCursor(34, 45);
+        tft.setTextColor(MAGENTA);
+        tft.print(7);
+        tft.setTextColor(BLUE);
+        tft.print(" - Set update rate");
+        tft.setCursor(34, 60);
+        tft.setTextColor(MAGENTA);
+        tft.print(8);
+        tft.setTextColor(BLUE);
+        tft.print(" - Delete all data");
+      }
+      if (key == 4) {
+        tft.setCursor(34, 15);
+        tft.setTextColor(MAGENTA);
+        tft.print(5);
+        tft.setTextColor(BLUE);
+        tft.print(" - Save & off");
+        //tft.setCursor(34, 30);
+        //tft.setTextColor(MAGENTA);
+        //tft.print(6);
+        //tft.setTextColor(BLUE);
+        //tft.print(" - Go to sleep");
+      }
+    } else {
+      if (interFaceLevel == 1) {
+        tft.setCursor(34, 120);
+        tft.print("5-1st target, 6-2nd, 7-3rd, 8-4th");
+        if (key == 5) nowlat = lat1;
+        nowlon = lon1;
+        if (key == 6) nowlat = lat2;
+        nowlon = lon2;
+        if (key == 7) nowlat = lat3;
+        nowlon = lon3;
+        if (key == 8) nowlat = lat4;
+        nowlon = lon4;
+      }
+      if (interFaceLevel == 2) {
+        if (5 <= key <= 8) {
+          int targ = key;
+          tft.fillRect(32, 9, 130, 128, BLACK);
+          tft.setCursor(34, 15);
+          tft.setTextColor(MAGENTA);
+          tft.print(1);
+          tft.setTextColor(BLUE);
+          tft.print(" - Set latidude");
+          tft.setCursor(34, 30);
+          printLat(targ);
+          tft.setCursor(34, 45);
+          tft.setTextColor(MAGENTA);
+          tft.print(2);
+          tft.setTextColor(BLUE);
+          tft.print(" - Set longtitude");
+          tft.setCursor(34, 60);
+          printLon(targ);
+          tft.setCursor(34, 75);
+          tft.setTextColor(MAGENTA);
+          tft.print("*");
+          tft.setTextColor(BLUE);
+          tft.print(" - Exit");
+          while (1) {
+            key = readKey();
+            if (key == 10) {
+              key2 = 2;
+              break;
+            }
+            if (key == 1) {
+              tft.setCursor(34, 30);
+              tft.fillRect(34, 30, 100, 14, BLACK);
+              submeanf = readingKeyboard(1);
+              Serial.print(submeanf);
+              if (0.0 <= submeanf <= 90.0) {
+                if (targ == 5) lat1 = submeanf;
+                else if (targ == 6) lat2 = submeanf;
+                else if (targ == 7) lat3 = submeanf;
+                else if (targ == 8) lat4 = submeanf;
+                saveToEEPROM();
+              } else {
+                tft.fillRect(34, 30, 100, 14, BLACK);
+                printLat(targ);
+              }
+            } else if (key == 2) {
+              tft.setCursor(34, 60);
+              tft.fillRect(34, 60, 100, 14, BLACK);
+              submeanf = readingKeyboard(1);
+              Serial.print(submeanf);
+              if (0.0 <= submeanf <= 180.0) {
+                if (targ == 5) lon1 = submeanf;
+                else if (targ == 6) lon2 = submeanf;
+                else if (targ == 7) lon3 = submeanf;
+                else if (targ == 8) lon4 = submeanf;
+                saveToEEPROM();
+              } else {
+                tft.fillRect(34, 60, 100, 14, BLACK);
+                printLon(targ);
+              }
+            }
+          }
+        }
+      }
+      if (interFaceLevel == 3) {
+        if (key == 5) {
+          saveToEEPROM();
+          digitalWrite(7, 0);
+        }
+        if (key == 6) {
+          EHC += 40;
+          tft.fillRect(32, 9, 130, 128, BLACK);
+          tft.setCursor(34, 15);
+          tft.print("Fixed");
+          delay(1000);
+          key2 = 3;
+        }
+        if (key == 7) {
+          tft.fillRect(32, 9, 130, 128, BLACK);
+          tft.setCursor(34, 15);
+          tft.setTextColor(MAGENTA);
+          tft.print(5);
+          tft.setTextColor(BLUE);
+          tft.print(" - Set clock speed:");
+          tft.setCursor(34, 30);
+          tft.print(deltime);
+          tft.print(" ms");
+          tft.setCursor(34, 45);
+          tft.setTextColor(MAGENTA);
+          tft.print(6);
+          tft.setTextColor(BLUE);
+          tft.print(" - Set update time:");
+          tft.setCursor(34, 60);
+          tft.print(UPDATE_TIME);
+          tft.print(" s");
+          tft.setCursor(34, 75);
+          tft.setTextColor(MAGENTA);
+          tft.print("*");
+          tft.setTextColor(BLUE);
+          tft.print(" - Exit");
+          tft.setCursor(34, 90);
+          tft.setTextColor(MAGENTA);
+          tft.print("#");
+          tft.setTextColor(BLUE);
+          tft.print(" - Enter");
+          while (1) {
+            key = readKey();
+            if (key == 10) {
+              key2 = 3;
+              break;
+            }
+            if (key == 5) {
+              tft.setCursor(34, 30);
+              tft.fillRect(34, 30, 100, 14, BLACK);
+              submean = readingKeyboard(0);
+              if (50 <= submean <= 1000) {
+                deltime = submean;
+                saveToEEPROM();
+              } else {
+                tft.setCursor(34, 30);
+                tft.fillRect(34, 30, 100, 14, BLACK);
+                tft.print(deltime);
+              }
+              Serial.print(deltime);
+            }
+            if (key == 6) {
+              tft.setCursor(34, 60);
+              tft.fillRect(34, 60, 100, 14, BLACK);
+              submean = readingKeyboard(0);
+              if (1 <= submean <= 10) {
+                UPDATE_TIME = submean;
+                saveToEEPROM();
+              } else {
+                tft.setCursor(34, 60);
+                tft.fillRect(34, 60, 100, 14, BLACK);
+                tft.print(UPDATE_TIME);
+              }
+              Serial.print(UPDATE_TIME);
+            }
+          }
+        }
+        if (key == 8) {
+          tft.fillRect(32, 9, 130, 128, BLACK);
+          tft.setCursor(34, 15);
+          tft.print("Are you sure?");
+          tft.setCursor(34, 30);
+          tft.setTextColor(MAGENTA);
+          tft.print("#");
+          tft.setTextColor(BLUE);
+          tft.print(" - Delete all");
+          tft.setCursor(34, 45);
+          tft.setTextColor(MAGENTA);
+          tft.print("*");
+          tft.setTextColor(BLUE);
+          tft.print(" - Cancel");
+          while (1) {
+            int key4 = readKey();
+            if (key4 == 10) {
+              key2 = 3;
+              break;
+            }
+            if (key4 == 11) {
+              tft.fillRect(32, 9, 130, 128, BLACK);
+              tft.setCursor(34, 15);
+              tft.print("Deleting data...");
+              for (int i = 0; i < EEPROM.length(); i++) {
+                EEPROM.write(i, 0);
+              }
+              tft.setCursor(34, 40);
+              tft.print("Done! Reset in 3 sec.");
+              delay(3000);
+              digitalWrite(7, 0);
+            }
+          }
+        }
+      }
+      if (interFaceLevel == 4) {
+        //if (key == 5) {
+        tft.fillScreen(BLACK);
+        saveToEEPROM();
+        tft.setCursor(0, 0);
+        tft.print("All data is saved, you can safetly turn off the device now");
+        //while (1) {}
+        //}
+        /*if (key == 6) {
+          tft.fillScreen(BLACK);
+          tft.setCursor(0, 0);
+          tft.print("Going to sleep in 5 sec (press any button to wake up)");
+          delay(5000);
+          tft.fillScreen(BLACK);
+          delay(50);
+          attachInterrupt(0, WakeUpInterrupt, FALLING);
+          power.sleep(SLEEP_FOREVER);
+          detachInterrupt(0);
+          key2 = 1;
+        }*/
+      }
+    }
+  }
+  prevInterfaceLevel = interFaceLevel;
+  delay(deltime);
+}
+
+int readKey() {
+  digitalWrite(keyb, 0, HIGH);
+  digitalWrite(keyb, 1, HIGH);
+  digitalWrite(keyb, 2, HIGH);
+  digitalWrite(keyb, 3, HIGH);
+  for (int i = 0; i < 4; i++) {
+    digitalWrite(keyb, i, LOW);
+    for (int j = 5; j < 8; j++) {
+      if (digitalRead(keyb, j) == 0) {
+        return keys[i][j - 5];
+      }
+    }
+    digitalWrite(keyb, i, HIGH);
+  }
+  return -1;
+}
+
+void drawInterface(int level) {
+  /*tft.setTextColor(MAGENTA);
+    tft.drawCircle(15, 22, 10, BLUE);
+    tft.drawLine(15, 30, 15, 14, BLUE);
+    tft.drawLine(12, 18, 15, 14, BLUE);
+    tft.drawLine(18, 18, 15, 14, BLUE);
+    tft.fillRect(25, 30, 5, 10, BLACK);
+    tft.setCursor(25, 30);
+    tft.print(1);
+    tft.fillCircle(15, 48, 7, BLUE);
+    tft.fillCircle(15, 48, 2, BLACK);
+    tft.fillTriangle(9, 52, 21, 52, 15, 62, BLUE);
+    tft.fillRect(25, 60, 5, 10, BLACK);
+    tft.setCursor(25, 60);
+    tft.print(2);
+    tft.fillCircle(15, 83, 7, BLUE);
+    tft.fillCircle(15, 83, 4, BLACK);
+    tft.fillRect(13, 74, 5, 5, BLUE);
+    tft.fillRect(13, 88, 5, 5, BLUE);
+    tft.fillRect(6, 81, 5, 5, BLUE);
+    tft.fillRect(20, 81, 5, 5, BLUE);
+    tft.fillRect(8, 76, 4, 4, BLUE);
+    tft.fillRect(19, 76, 4, 4, BLUE);
+    tft.fillRect(8, 87, 4, 4, BLUE);
+    tft.fillRect(19, 87, 4, 4, BLUE);
+    tft.fillRect(25, 90, 5, 10, BLACK);
+    tft.setCursor(25, 90);
+    tft.print(3);
+    tft.fillCircle(15, 113, 10, BLUE);
+    tft.fillCircle(15, 113, 8, BLACK);
+    tft.fillRect(11, 102, 9, 13, BLACK);
+    tft.fillRect(14, 102, 3, 14, BLUE);
+    tft.setCursor(25, 120);
+    tft.print(4);*/
+  tft.drawLine(0, 8, 160, 8, BLUE);
+  tft.drawLine(0, 38, 31, 38, BLUE);
+  tft.drawLine(0, 68, 31, 68, BLUE);
+  tft.drawLine(0, 98, 31, 98, BLUE);
+  tft.fillRect(32, 9, 130, 128, BLACK);
+  if (level == 1) {
+    tft.drawLine(31, 8, 31, 38, BLACK);
+    tft.drawLine(31, 38, 31, 128, BLUE);
+    drawCompass();
+  }
+  if (level == 2) {
+    tft.drawLine(31, 38, 31, 68, BLACK);
+    tft.drawLine(31, 8, 31, 38, BLUE);
+    tft.drawLine(31, 68, 31, 128, BLUE);
+  }
+  if (level == 3) {
+    tft.drawLine(31, 68, 31, 98, BLACK);
+    tft.drawLine(31, 8, 31, 68, BLUE);
+    tft.drawLine(31, 98, 31, 128, BLUE);
+  }
+  if (level == 4) {
+    tft.drawLine(31, 8, 31, 98, BLUE);
+    tft.drawLine(31, 98, 31, 128, BLACK);
+  }
+}
+
+void drawConnectLevel() {
+  int lvl = 0;
+  if (gps.time.isValid() && int(gps.time.hour()) != 0 && int(gps.time.minute()) != 0 && int(gps.time.second()) != 0) {
+    lvl += 1;
+    valtime = 1;
+  } else {
+    valtime = 0;
+  }
+  if (gps.date.isValid() && int(gps.date.year()) != 2000) {
+    lvl += 1;
+    valdat = 1;
+  } else {
+    valtime = 0;
+  }
+  if (gps.location.isValid()) {
+    lvl += 3;
+  }
+  if (lvl > 0) {
+    int clr = 0;
+    if (lvl < 3) {
+      clr = RED;
+    } else if (lvl == 3) {
+      clr = YELLOW;
+    } else if (lvl > 3) {
+      clr = GREEN;
+    }
+    for (int i = 0; i < lvl; i++) {
+      tft.drawLine((14 + i * 2), (7 - i), (14 + i * 2), 7, clr);
+    }
+  } else {
+    tft.drawLine(14, 7, 14, 7, RED);
+    tft.drawLine(16, 6, 16, 7, RED);
+    tft.drawLine(18, 5, 18, 7, RED);
+    tft.drawLine(20, 4, 20, 7, RED);
+    tft.drawLine(22, 3, 22, 7, RED);
+    tft.drawLine(23, 7, 13, 3, RED);
+    tft.drawLine(13, 7, 23, 3, RED);
+  }
+}
+
+void drawGPSload() {
+  load = 0;
+  if (t - millis() > 5000 && ss.available() == 0) {
+    t = millis();
+    tft.fillRect(5, 2, 3, 3, RED);
+    tft.drawRect(3, 0, 7, 7, RED);
+  } else {
+    if (gps.satellites.value() < 4) {
+      tft.drawRect(3, 0, 7, 7, RED);
+    } else if (3 < gps.satellites.value() < 7) {
+      tft.drawRect(3, 0, 7, 7, YELLOW);
+    } else if (gps.satellites.value() > 6) {
+      tft.drawRect(3, 0, 7, 7, GREEN);
+    }
+    tft.fillRect(5, 2, 3, 3, BLACK);
+  }
+  while (ss.available() > 0) {
+    gps.encode(ss.read());
+    if (load) {
+      tft.fillRect(5, 2, 3, 3, YELLOW);
+      load = !load;
+    } else {
+      tft.fillRect(5, 2, 3, 3, BLACK);
+      load = !load;
+    }
+  }
+  if (gps.charsProcessed() >= 10) {
+    Serial.println("Got some GPS data");
+    tft.fillRect(5, 2, 3, 3, GREEN);
+  }
+}
+
+void drawDate() {
+  tft.setCursor(75, 0);
+  if (valdat) {
+    tft.setTextColor(BLUE);
+    tft.print(gps.date.day());
+    tft.print(".");
+    tft.print(gps.date.month());
+    tft.print(".");
+    tft.print(gps.date.year());
+  } else {
+    tft.setTextColor(RED);
+    tft.print("--.--.----");
+  }
+  tft.setCursor(0, 0);
+  tft.setTextColor(BLUE);
+}
+
+void drawBatLevel() {
+  int lvl = 2;
+  int clr = BLUE;
+  /*if (digitalRead(A0)) lvl++;
+  if (digitalRead(A1)) lvl++;
+  if (digitalRead(A2)) lvl++;
+  if (digitalRead(A3)) lvl++;*/
+  if (lvl == 0) {
+    clr = RED;
+    while (1) {
+      tft.fillScreen(0);
+      tft.drawRect(140, 1, 15, 7, RED);
+      tft.drawRect(138, 3, 2, 3, RED);
+      tft.drawLine(138, 1, 156, 7, RED);
+      tft.drawLine(138, 7, 156, 0, RED);
+      delay(100);
+    }
+    drawInterface(1);
+  }
+  if (lvl == 1) {
+    clr = RED;
+  }
+  if (lvl == 2 || lvl == 3) {
+    clr = YELLOW;
+  }
+  if (lvl == 4) {
+    clr = GREEN;
+  }
+  tft.drawRect(140, 1, 15, 7, clr);
+  tft.drawRect(138, 3, 2, 3, clr);
+  int i1 = 0;
+  while (i1 < lvl) {
+    i1++;
+    tft.drawLine((154 - i1 * 3), 3, (154 - i1 * 3), 5, clr);
+    tft.drawLine((155 - i1 * 3), 3, (155 - i1 * 3), 5, clr);
+  }
+  i1 = 0;
+}
+
+void drawTime() {
+  tft.setCursor(26, 0);
+  if (valtime) {
+    if (!gps.location.isValid()) {
+      tft.setTextColor(YELLOW);
+      tft.print(gps.time.hour());
+      tft.print(":");
+      tft.print(gps.time.minute());
+      tft.print(" WT");
+    }
+  } else {
+    tft.setTextColor(RED);
+    tft.print("__:__");
+  }
+  tft.setCursor(0, 0);
+  tft.setTextColor(BLUE);
+}
+
+void saveToEEPROM() {
+  Serial.println("Saving data to EEPROM");
+  EEPROM.put(0, 'w');                 //is there any data
+//EEPROM.put(1, EHC);                 //EHC (EEPROM Head Cell)
+  EEPROM.put(EHC + 3, silentmode);    //silentmode
+  EEPROM.put(EHC + 4, lat1);          //1st point
+  EEPROM.put(EHC + 12, lon1);         //1st point
+  EEPROM.put(EHC + 20, lat1);         //2nd point
+  EEPROM.put(EHC + 28, lon2);         //2nd point
+  EEPROM.put(EHC + 36, lat3);         //3d point
+  EEPROM.put(EHC + 44, lon3);         //3d point
+  EEPROM.put(EHC + 52, lat4);         //4th point
+  EEPROM.put(EHC + 60, lon4);         //4th point
+  EEPROM.put(EHC + 68, deltime);      //deltime
+  EEPROM.put(EHC + 70, UPDATE_TIME);  //update time
+}
+
+void getFromEEPROM() {
+  if (EEPROM.read(0) == 'w') {
+    Serial.println("Reading data from EEPROM...");
+    //EEPROM.get(1, EHC);                 //EHC (EEPROM Head Cell)
+    EEPROM.get(EHC + 3, silentmode);    //silentmode
+    EEPROM.get(EHC + 4, lat1);          //1st point
+    EEPROM.get(EHC + 12, lon1);         //1st point
+    EEPROM.get(EHC + 20, lat1);         //2nd point
+    EEPROM.get(EHC + 28, lon2);         //2nd point
+    EEPROM.get(EHC + 36, lat3);         //3d point
+    EEPROM.get(EHC + 44, lon3);         //3d point
+    EEPROM.get(EHC + 52, lat4);         //4th point
+    EEPROM.get(EHC + 60, lon4);         //4th point
+    EEPROM.get(EHC + 68, deltime);      //deltime
+    EEPROM.get(EHC + 70, UPDATE_TIME);  //update time
+  } else {
+    Serial.println("No EEPROM data found");
+  }
+}
+
+void drawCompass() {
+  if (gps.location.isValid()) {
+    tft.drawCircle(96, 65, 50, BLUE);
+    tft.drawCircle(96, 65, 48, BLUE);
+    double distanceKm = gps.distanceBetween(gps.location.lat(), gps.location.lng(), nowlat, nowlon);
+    double courseTo = gps.courseTo(gps.location.lat(), gps.location.lng(), nowlat, nowlon);
+    tft.drawLine(96, 65, 96 + (48 * cos(courseTo * 0.017)), 65 + (48 * sin(courseTo * 0.017)), BLUE);
+  } else {
+    tft.drawCircle(96, 65, 50, RED);
+    tft.drawCircle(96, 65, 48, RED);
+    tft.fillRect(73, 65, 5, 5, RED);
+    tft.fillRect(83, 60, 5, 10, RED);
+    tft.fillRect(93, 55, 5, 15, RED);
+    tft.fillRect(103, 50, 5, 20, RED);
+    tft.fillRect(113, 45, 5, 25, RED);
+    tft.drawLine(72, 70, 119, 44, RED);
+    tft.drawLine(119, 70, 74, 44, RED);
+    tft.drawLine(72, 71, 119, 45, RED);
+    tft.drawLine(119, 71, 74, 45, RED);
+    tft.setTextColor(RED);
+    tft.setCursor(60, 75);
+    tft.print("No GPS signal");
+  }
+}
+
+/*void WakeUpInterrupt() {
+  power.wakeUp();
+}*/
+
+double readingKeyboard(bool comma) {
+  entr = "";
+  delay(deltime * 5);
+  bool commause = 0;
+  while (1) {
+    int key3 = readKey();
+    if (key3 == 10) {
+      if (comma and !commause) {
+        entr = entr + ".";
+        tft.print(".");
+        commause = 1;
+      } else {
+        return -1;
+      }
+    } else if (key3 == 11) {
+      if (comma == 0) {
+        return entr.toInt();
+      } else if (comma == 1) {
+        return entr.toDouble();
+      } else {
+        return -1;
+      }
+    } else if (key3 != -1) {
+      entr = entr + String(key3);
+      tft.print(key3);
+      Serial.println(entr);
+    }
+    delay(deltime * 3);
+  }
+}
+
+void printLat(int targ) {
+  if (targ == 5) tft.print(lat1);
+  else if (targ == 6) tft.print(lat2);
+  else if (targ == 7) tft.print(lat3);
+  else if (targ == 8) tft.print(lat4);
+}
+
+void printLon(int targ) {
+  if (targ == 5) tft.print(lon1);
+  else if (targ == 6) tft.print(lon2);
+  else if (targ == 7) tft.print(lon3);
+  else if (targ == 8) tft.print(lon4);
+}
